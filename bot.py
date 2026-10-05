@@ -503,18 +503,24 @@ async def cancel_trade_handler(callback: CallbackQuery, bot: Bot):
     trade_id = callback.data.split(":")[1]
     TRADES_CACHE.pop(trade_id, None)
 
-    await callback.answer(text="Сделка отменена.", show_alert=True)
-    
+    await callback.answer("Сделка отменена.")
+
+    # Обычное сообщение в чате: удаляем исходное сообщение и отправляем новое.
+    if callback.message:
+        try:
+            await callback.message.delete()
+        except Exception as exc:
+            logging.warning("Не удалось удалить сообщение отменённой сделки %s: %s", trade_id, exc)
+
+        await callback.message.answer("❌ <b>Сделка отменена.</b>", parse_mode="HTML")
+        return
+
+    # В inline-сообщении Bot API не позволяет физически удалить сообщение
+    # по inline_message_id, поэтому заменяем его на финальный статус без кнопок.
     if callback.inline_message_id:
         await bot.edit_message_text(
             inline_message_id=callback.inline_message_id,
-            text="<b>Сделка была отменена.</b>",
-            parse_mode="HTML",
-            reply_markup=None
-        )
-    elif callback.message:
-        await callback.message.edit_text(
-            text="<b>Сделка была отменена.</b>",
+            text="❌ <b>Сделка отменена.</b>",
             parse_mode="HTML",
             reply_markup=None
         )
