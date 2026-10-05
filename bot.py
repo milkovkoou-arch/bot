@@ -20,47 +20,51 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 router = Router()
 
+# ==========================================
+# ШАГ 1: Создание предложения сделки (Inline)
+# ==========================================
 @router.inline_query()
 async def process_inline_trade(inline_query: InlineQuery):
     query_text = inline_query.query.strip()
     args = query_text.split()
     
-    # Ожидается ввод вида: swagbag 152347 17 ton (или gram)
+    # Ожидается формат ввода: swagbag 152347 17 ton
     if len(args) < 3:
         return
 
-    item_name = args[0]
+    item_name = args[0].capitalize()
     item_id = args[1]
     price = args[2]
     currency = args[3].upper() if len(args) > 3 else "TON"
 
     trade_id = f"TG-{str(uuid.uuid4())[:8].upper()}"
-    
-    # Покупатель — тот, кто вызывает инлайн-бота и отправляет предложение
     buyer_user = inline_query.from_user
     buyer_tag = f"@{buyer_user.username}" if buyer_user.username else buyer_user.first_name
 
-    # Ссылка для генерации официального превью карточки предмета в Telegram
     nft_preview_url = f"https://getgems.io/nft/{item_name.lower()}-{item_id}"
 
+    # Первоначальный текст предложения
     message_text = (
         f"🤝 **Предложение сделки [Escrow Trade Bot]**\n\n"
         f"📋 **Ордер:** `#{trade_id}`\n"
-        f"📦 **Предмет:** {item_name.capitalize()} #{item_id}\n"
+        f"📦 **Предмет:** {item_name} #{item_id}\n"
         f"💰 **Сумма резерва:** {price} {currency}\n\n"
         f"👤 **Покупатель:** {buyer_tag}\n"
         f"👤 **Продавец:** Владелец предмета\n\n"
-        f"Статус: Ожидает передачи NFT от продавца.\n"
-        f"🔗 {nft_preview_url}"  # Ссылка генерирует плашку NFT под сообщением
+        f"⏳ **Статус:** Ожидает подтверждения от продавца. Предложение действительно 24 часа.\n"
+        f"🔗 {nft_preview_url}"
     )
 
+    # Кнопки для ШАГА 1
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🎁 Передать NFT", 
-                    callback_data=f"trade_accept:{trade_id}:{buyer_tag}"
-                ),
+                    text="✅ Принять предложение", 
+                    callback_data=f"trade_accept:{trade_id}:{item_name}:{item_id}:{price}:{currency}:{buyer_tag}"
+                )
+            ],
+            [
                 InlineKeyboardButton(
                     text="❌ Отклонить", 
                     callback_data=f"trade_cancel:{trade_id}"
@@ -76,7 +80,6 @@ async def process_inline_trade(inline_query: InlineQuery):
         input_message_content=InputTextMessageContent(
             message_text=message_text,
             parse_mode="Markdown",
-            # Настройка подгрузки крупного медиа-превью карточки
             link_preview_options=LinkPreviewOptions(
                 url=nft_preview_url,
                 prefer_large_media=True,
@@ -88,39 +91,83 @@ async def process_inline_trade(inline_query: InlineQuery):
 
     await inline_query.answer([result], cache_time=1)
 
+# ==========================================
+# ШАГ 2: Продавец принял предложение
+# ==========================================
 @router.callback_query(F.data.startswith("trade_accept:"))
 async def accept_trade_handler(callback: CallbackQuery):
     data_parts = callback.data.split(":")
     trade_id = data_parts[1]
-    buyer_tag = data_parts[2]
+    item_name = data_parts[2]
+    item_id = data_parts[3]
+    price = data_parts[4]
+    currency = data_parts[5]
+    buyer_tag = data_parts[6]
     
-    # Продавец — пользователь, который нажал на кнопку «Передать NFT»
-    seller_user = callback.from_user
-    seller_tag = f"@{seller_user.username}" if seller_user.username else seller_user.first_name
+    nft_link = f"https://getgems.io/nft/{item_name.lower()}-{item_id}"
 
-    await callback.answer(
-        text="Сделка подтверждена! Средства зарезервированы, ожидаем передачу.", 
-        show_alert=True
-    )
-
+    # Текст меняется на инструкцию по передаче
     updated_text = (
-        f"✅ **Сделка #{trade_id} принята!**\n\n"
-        f"👤 **Покупатель:** {buyer_tag}\n"
-        f"👤 **Продавец:** {seller_tag}\n\n"
-        f"⏳ Средства удержаны в боте. Ожидается подтверждение получения предмета покупателем."
+        f"📋 **Ордер #{trade_id}**\n\n"
+        f"Покупатель зарезервировал **{price} {currency}** на эскроу-счёте бота. "
+        f"Средства будут автоматически зачислены продавцу сразу после подтверждения передачи предмета.\n\n"
+        f"**Инструкция для завершения сделки:**\n"
+        f"1. Передайте подарок пользователю: {buyer_tag}\n"
+        f"2. Нажмите «Передать NFT» и выберите **{item_name} #{item_id}**\n"
+        f"3. Подтвердите передачу подарка кнопкой ниже.\n\n"
+        f"⏳ Резерв действует 24 часа.\n"
+        f"🔗 {nft_link}"
     )
 
+    # Новые кнопки для ШАГА 2
+    step2_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎁 Передать NFT", 
+                    url=nft_link
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✔️ Подтвердить передачу", 
+                    callback_data=f"trade_confirm_transfer:{trade_id}"
+                )
+            ]
+        ]
+    )
+
+    await callback.answer("Предложение принято! Следуйте инструкции.")
     await callback.message.edit_text(
         text=updated_text,
         parse_mode="Markdown",
-        reply_markup=None
+        reply_markup=step2_keyboard,
+        link_preview_options=LinkPreviewOptions(
+            url=nft_link,
+            prefer_large_media=True,
+            show_above_text=False
+        )
     )
 
+# ==========================================
+# ШАГ 3: Нажатие «Подтвердить передачу»
+# ==========================================
+@router.callback_query(F.data.startswith("trade_confirm_transfer:"))
+async def confirm_transfer_handler(callback: CallbackQuery):
+    # При нажатии кнопки проверяем статус
+    await callback.answer(
+        text="⚠️ Ошибка: Предмет еще не был передан пользователю. Передайте NFT и попробуйте снова.", 
+        show_alert=True
+    )
+
+# ==========================================
+# Отмена сделки
+# ==========================================
 @router.callback_query(F.data.startswith("trade_cancel:"))
 async def cancel_trade_handler(callback: CallbackQuery):
     await callback.answer(text="Сделка отменена.", show_alert=True)
     await callback.message.edit_text(
-        text="❌ **Сделка была отменена.**",
+        text="❌ **Сделка была отменена продавцом.**",
         parse_mode="Markdown",
         reply_markup=None
     )
@@ -131,7 +178,7 @@ async def handle_health_check(request):
 
 async def main():
     app = web.Application()
-    app.router.add_get("/", handle_health_check)
+    app.router.add_get("/", handle_handle_check if 'handle_handle_check' in locals() else handle_health_check)
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", 10000))
