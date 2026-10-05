@@ -2,6 +2,7 @@ import asyncio
 import os
 import uuid
 import logging
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import (
     InlineQuery, 
@@ -15,7 +16,6 @@ from aiogram.types import (
 # Включение логирования
 logging.basicConfig(level=logging.INFO)
 
-# Получение токена из переменных окружения Render
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 router = Router()
@@ -25,7 +25,6 @@ async def process_inline_trade(inline_query: InlineQuery):
     query_text = inline_query.query.strip()
     args = query_text.split()
     
-    # Ожидаем ввод формата: swagbag 152347 17 gram
     if len(args) < 3:
         return
 
@@ -94,7 +93,21 @@ async def accept_trade_handler(callback: CallbackQuery):
         reply_markup=None
     )
 
+# Фейковый веб-сервер для пройдения проверки порта на Render
+async def handle_health_check(request):
+    return web.Response(text="Bot is running!")
+
 async def main():
+    # Запускаем фоновый HTTP-сервер для Render
+    app = web.Application()
+    app.router.add_get("/", handle_health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    # Запускаем самого бота Telegram
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
