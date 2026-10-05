@@ -24,7 +24,10 @@ TRADES_CACHE = {}
 
 # Укажите реальный custom_emoji_id из пакета https://t.me/addemoji/MyTonWalletA
 # (Узнать его можно, переслав нужный стикер боту @RawDataBot)
-TON_EMOJI_ID = "5386348332029748682"
+# ID именно GRAM-эмодзи из https://t.me/addemoji/MyTonWalletA
+# Если текущий ID у вас показывает Diamond, замените его на ID Gram
+# из @RawDataBot.
+GRAM_EMOJI_ID = "5386348332029748682"
 
 POPULAR_GIFTS = [
     "SwagBag", "PoolFloat", "PlushPepe", "BondingBear", "SpottedDog", 
@@ -107,7 +110,7 @@ async def process_inline_trade(inline_query: InlineQuery):
 
     # Настройка валюты и кастомного эмодзи для TON
     if currency == "TON":
-        currency_display = f"20 TON <tg-emoji emoji-id='{TON_EMOJI_ID}'>💎</tg-emoji>"
+        currency_display = f"{price} TON <tg-emoji emoji-id='{GRAM_EMOJI_ID}'>💎</tg-emoji>"
     else:
         currency_display = f"{price} {currency} 💰"
 
@@ -163,7 +166,7 @@ async def process_inline_trade(inline_query: InlineQuery):
             link_preview_options=LinkPreviewOptions(
                 url=nft_transfer_url,
                 prefer_large_media=True,
-                show_above_text=True
+                show_above_text=False
             )
         ),
         reply_markup=keyboard
@@ -228,7 +231,7 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
             link_preview_options=LinkPreviewOptions(
                 url=nft_url,
                 prefer_large_media=True,
-                show_above_text=True
+                show_above_text=False
             )
         )
     elif callback.message:
@@ -239,7 +242,7 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
             link_preview_options=LinkPreviewOptions(
                 url=nft_url,
                 prefer_large_media=True,
-                show_above_text=True
+                show_above_text=False
             )
         )
 
