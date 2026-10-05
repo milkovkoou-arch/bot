@@ -2,6 +2,7 @@ import asyncio
 import os
 import uuid
 import logging
+from html import escape
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.types import (
@@ -24,10 +25,11 @@ TRADES_CACHE = {}
 
 # Укажите реальный custom_emoji_id из пакета https://t.me/addemoji/MyTonWalletA
 # (Узнать его можно, переслав нужный стикер боту @RawDataBot)
-# ID именно GRAM-эмодзи из https://t.me/addemoji/MyTonWalletA
-# Если текущий ID у вас показывает Diamond, замените его на ID Gram
-# из @RawDataBot.
-GRAM_EMOJI_ID = "5386348332029748682"
+# ID GRAM-эмодзи из https://t.me/addemoji/MyTonWalletA
+# Получен от пользователя через @RawDataBot.
+# Важно: для inline-сообщений Telegram может потребовать Premium владельца бота
+# или дополнительный username бота на Fragment, иначе будет показан fallback-emoji.
+GRAM_EMOJI_ID = "5264766603584641330"
 
 POPULAR_GIFTS = [
     "SwagBag", "PoolFloat", "PlushPepe", "BondingBear", "SpottedDog", 
@@ -41,13 +43,26 @@ def format_item_name(raw_name: str) -> str:
     return "".join(word.capitalize() for word in raw_name.replace("-", " ").split())
 
 def ensure_mention(tag: str) -> str:
-    """Гарантирует, что у юзернейма есть знак @ для синей подсветки в Telegram"""
+    """Нормализует username до формата @username."""
     if not tag:
         return "@seller"
     tag = tag.strip()
-    if tag.startswith("@"):
-        return tag
-    return f"@{tag}"
+    return tag if tag.startswith("@") else f"@{tag}"
+
+
+def buyer_link(user_id: int, username: str | None, first_name: str) -> str:
+    """Делает настоящую Telegram-mention-ссылку, которую увидят все участники чата."""
+    visible = ensure_mention(username) if username else first_name
+    return f'<a href="tg://user?id={user_id}">{escape(visible)}</a>'
+
+
+def seller_link(tag: str) -> str:
+    """Делает обычную кликабельную ссылку на профиль продавца по username."""
+    normalized = ensure_mention(tag)
+    if normalized == "@seller":
+        return escape(normalized)
+    username = normalized[1:]
+    return f'<a href="https://t.me/{escape(username)}">{escape(normalized)}</a>'
 
 @router.inline_query()
 async def process_inline_trade(inline_query: InlineQuery):
@@ -56,6 +71,7 @@ async def process_inline_trade(inline_query: InlineQuery):
     
     buyer_user = inline_query.from_user
     buyer_tag = ensure_mention(buyer_user.username) if buyer_user.username else buyer_user.first_name
+    buyer_mention = buyer_link(buyer_user.id, buyer_user.username, buyer_user.first_name)
 
     if len(args) < 2 or (len(args) == 1 and not args[0].startswith("http")):
         search_term = args[0].lower() if len(args) == 1 else ""
@@ -83,6 +99,7 @@ async def process_inline_trade(inline_query: InlineQuery):
         if arg.startswith("@"):
             seller_tag = ensure_mention(arg)
             break
+    seller_mention = seller_link(seller_tag)
 
     if args[0].startswith("http://") or args[0].startswith("https://"):
         raw_url = args[0]
@@ -122,19 +139,21 @@ async def process_inline_trade(inline_query: InlineQuery):
         "buyer_tag": buyer_tag,
         "seller_tag": seller_tag,
         "nft_url": nft_transfer_url,
-        "currency_display": currency_display
+        "currency_display": currency_display,
+        "buyer_mention": buyer_mention,
+        "seller_mention": seller_mention
     }
 
-    hidden_image_link = f'<a href="{nft_transfer_url}">&#8203;</a>'
-
-    # ШАГ 1: Карточка предложения (Покупатель слева, Продавец справа/на новой строке с четким разделением)
+    # ШАГ 1: Карточка предложения.
+    # Для превью NFT URL передаётся напрямую в LinkPreviewOptions,
+    # поэтому невидимая HTML-ссылка внутри текста больше не нужна.
     message_text = (
-        f"{hidden_image_link}🤝 <b>Предложение о покупке [Escrow Trade Bot]</b>\n\n"
+        f"🤝 <b>Предложение о покупке [Escrow Trade Bot]</b>\n\n"
         f"📋 <b>Ордер:</b> <code>#{trade_id}</code>\n"
         f"📦 <b>Предмет:</b> {item_name} #{item_id}\n"
         f"💰 <b>Сумма предложения:</b> {currency_display}\n\n"
-        f"👤 <b>Покупатель:</b> {buyer_tag}\n"
-        f"👤 <b>Продавец:</b> {seller_tag}\n\n"
+        f"👤 <b>Покупатель:</b> {buyer_mention}\n"
+        f"👤 <b>Продавец:</b> {seller_mention}\n\n"
         f"⏳ <b>Статус:</b> Ожидает ответа от продавца. Предложение будет действовать 24 часа."
     )
 
@@ -189,16 +208,15 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
     item_name = trade["item_name"]
     item_id = trade["item_id"]
     buyer_tag = trade["buyer_tag"]
+    buyer_mention = trade["buyer_mention"]
     nft_url = trade["nft_url"]
     currency_display = trade["currency_display"]
 
-    hidden_image_link = f'<a href="{nft_url}">&#8203;</a>'
-
     updated_text = (
-        f"{hidden_image_link}📋 <b>Ордер #{trade_id}</b>\n\n"
+        f"📋 <b>Ордер #{trade_id}</b>\n\n"
         f"Средства ({currency_display}) находятся на специальном эскроу-счёте (в холде) и будут автоматически зачислены на ваш баланс сразу после передачи подарка.\n\n"
         f"<b>Инструкция для завершения сделки:</b>\n"
-        f"1. Передайте подарок пользователю: {buyer_tag}\n"
+        f"1. Передайте подарок пользователю: {buyer_mention}\n"
         f"2. Нажмите «Передать NFT» и выберите <b>{item_name} #{item_id}</b>\n"
         f"3. Подтвердите передачу подарка."
     )
