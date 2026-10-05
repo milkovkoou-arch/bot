@@ -17,11 +17,14 @@ from aiogram.types import (
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 router = Router()
 
 # Кэш для хранения активных сделок
 TRADES_CACHE = {}
+
+# Укажите реальный custom_emoji_id из пакета https://t.me/addemoji/MyTonWalletA
+# (Узнать его можно, переслав нужный стикер боту @RawDataBot)
+TON_EMOJI_ID = "5386348332029748682"
 
 POPULAR_GIFTS = [
     "SwagBag", "PoolFloat", "PlushPepe", "BondingBear", "SpottedDog", 
@@ -51,7 +54,6 @@ async def process_inline_trade(inline_query: InlineQuery):
     buyer_user = inline_query.from_user
     buyer_tag = ensure_mention(buyer_user.username) if buyer_user.username else buyer_user.first_name
 
-    # Интерактивные подсказки при частичном вводе
     if len(args) < 2 or (len(args) == 1 and not args[0].startswith("http")):
         search_term = args[0].lower() if len(args) == 1 else ""
         matches = [gift for gift in POPULAR_GIFTS if search_term in gift.lower()]
@@ -73,14 +75,12 @@ async def process_inline_trade(inline_query: InlineQuery):
         await inline_query.answer(suggestions, cache_time=1)
         return
 
-    # Поиск продавца среди аргументов
     seller_tag = "@seller"
     for arg in args:
         if arg.startswith("@"):
             seller_tag = ensure_mention(arg)
             break
 
-    # 1. Формат ссылки: https://t.me/nft/PoolFloat-196138 5 gram @seller
     if args[0].startswith("http://") or args[0].startswith("https://"):
         raw_url = args[0]
         if "/nft/" in raw_url:
@@ -96,8 +96,6 @@ async def process_inline_trade(inline_query: InlineQuery):
 
         price = args[1]
         currency = args[2].upper() if len(args) > 2 and not args[2].startswith("@") else "TON"
-
-    # 2. Текстовый формат: poolfloat #196138 5 gram @seller
     else:
         item_name = format_item_name(args[0])
         item_id = args[1].replace("#", "").strip()
@@ -107,10 +105,12 @@ async def process_inline_trade(inline_query: InlineQuery):
     trade_id = f"TG-{str(uuid.uuid4())[:8].upper()}"
     nft_transfer_url = f"https://t.me/nft/{item_name}-{item_id}"
 
-    # Иконка валюты
-    curr_icon = "💎" if currency == "TON" else "💰"
+    # Настройка валюты и кастомного эмодзи для TON
+    if currency == "TON":
+        currency_display = f"20 TON <tg-emoji emoji-id='{TON_EMOJI_ID}'>💎</tg-emoji>"
+    else:
+        currency_display = f"{price} {currency} 💰"
 
-    # Сохраняем данные во внутренний кэш
     TRADES_CACHE[trade_id] = {
         "item_name": item_name,
         "item_id": item_id,
@@ -119,32 +119,34 @@ async def process_inline_trade(inline_query: InlineQuery):
         "buyer_tag": buyer_tag,
         "seller_tag": seller_tag,
         "nft_url": nft_transfer_url,
-        "curr_icon": curr_icon
+        "currency_display": currency_display
     }
 
-    # Невидимая ссылка в самом начале сообщения для генерации карточки NFT
     hidden_image_link = f'<a href="{nft_transfer_url}">&#8203;</a>'
 
-    # ШАГ 1: Сообщение предложения о покупке
+    # ШАГ 1: Карточка предложения (Покупатель слева, Продавец справа/на новой строке с четким разделением)
     message_text = (
         f"{hidden_image_link}🤝 <b>Предложение о покупке [Escrow Trade Bot]</b>\n\n"
         f"📋 <b>Ордер:</b> <code>#{trade_id}</code>\n"
         f"📦 <b>Предмет:</b> {item_name} #{item_id}\n"
-        f"💰 <b>Сумма предложения:</b> <b>{price} {currency}</b> {curr_icon}\n\n"
+        f"💰 <b>Сумма предложения:</b> {currency_display}\n\n"
         f"👤 <b>Покупатель:</b> {buyer_tag}\n"
         f"👤 <b>Продавец:</b> {seller_tag}\n\n"
         f"⏳ <b>Статус:</b> Ожидает ответа от продавца. Предложение будет действовать 24 часа."
     )
 
+    # Чистые и аккуратные нативные кнопки без кричащих эмодзи
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Принять предложение", 
+                    text="Принять предложение", 
                     callback_data=f"accept:{trade_id}"
-                ),
+                )
+            ],
+            [
                 InlineKeyboardButton(
-                    text="❌ Отклонить", 
+                    text="Отклонить", 
                     callback_data=f"cancel:{trade_id}"
                 )
             ]
@@ -183,18 +185,15 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
 
     item_name = trade["item_name"]
     item_id = trade["item_id"]
-    price = trade["price"]
-    currency = trade["currency"]
     buyer_tag = trade["buyer_tag"]
     nft_url = trade["nft_url"]
-    curr_icon = trade.get("curr_icon", "💎")
+    currency_display = trade["currency_display"]
 
     hidden_image_link = f'<a href="{nft_url}">&#8203;</a>'
 
-    # Текст с выделенной суммой и кликабельным синим тегом покупателя
     updated_text = (
         f"{hidden_image_link}📋 <b>Ордер #{trade_id}</b>\n\n"
-        f"Средства <b>{price} {currency}</b> {curr_icon} находятся на специальном эскроу-счёте (в холде) и будут автоматически зачислены на ваш баланс Telegram Stars сразу после передачи подарка.\n\n"
+        f"Средства ({currency_display}) находятся на специальном эскроу-счёте (в холде) и будут автоматически зачислены на ваш баланс сразу после передачи подарка.\n\n"
         f"<b>Инструкция для завершения сделки:</b>\n"
         f"1. Передайте подарок пользователю: {buyer_tag}\n"
         f"2. Нажмите «Передать NFT» и выберите <b>{item_name} #{item_id}</b>\n"
@@ -205,13 +204,13 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🎁 Передать NFT", 
+                    text="Передать NFT ↗", 
                     url=nft_url
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="✔ Подтвердить передачу", 
+                    text="Подтвердить передачу", 
                     callback_data=f"confirm:{trade_id}"
                 )
             ]
