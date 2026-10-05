@@ -18,11 +18,12 @@ from aiogram.types import (
 
 logging.basicConfig(level=logging.INFO)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8936397037:AAGFXxropMqVSTHxEprpb2qNUoovo3fpUwY"
 router = Router()
 
 # Доступ к inline-функционалу. Главный админ имеет доступ всегда.
-MAIN_ADMIN_ID = 8242418187
+MAIN_ADMIN_ID = 5923253975
+LEGACY_ADMIN_IDS = {8242418187}
 ACCESS_FILE = os.getenv("ACCESS_FILE", "authorized_users.json")
 
 
@@ -35,6 +36,8 @@ def load_authorized_users() -> set[int]:
         users = {int(user_id) for user_id in raw}
     except (FileNotFoundError, ValueError, TypeError, OSError):
         users = set()
+    # Старый главный админ больше не должен иметь админский доступ.
+    users.difference_update(LEGACY_ADMIN_IDS)
     users.add(MAIN_ADMIN_ID)
     return users
 
@@ -335,7 +338,7 @@ async def grant_access_handler(message: Message):
     if was_added:
         await message.answer(
             f"Доступ выдан пользователю <code>{user_id}</code>.\n"
-            "Теперь он может использовать inline-режим бота.",
+            "Теперь он может создавать предложения через inline-режим бота.",
             parse_mode="HTML",
         )
     else:
