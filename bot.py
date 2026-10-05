@@ -34,13 +34,22 @@ def format_item_name(raw_name: str) -> str:
     """Приводит название к нормальному формату (poolfloat -> PoolFloat)"""
     return "".join(word.capitalize() for word in raw_name.replace("-", " ").split())
 
+def ensure_mention(tag: str) -> str:
+    """Гарантирует, что у юзернейма есть знак @ для синей подсветки в Telegram"""
+    if not tag:
+        return "@seller"
+    tag = tag.strip()
+    if tag.startswith("@"):
+        return tag
+    return f"@{tag}"
+
 @router.inline_query()
 async def process_inline_trade(inline_query: InlineQuery):
     query_text = inline_query.query.strip()
     args = query_text.split()
     
     buyer_user = inline_query.from_user
-    buyer_tag = f"@{buyer_user.username}" if buyer_user.username else buyer_user.first_name
+    buyer_tag = ensure_mention(buyer_user.username) if buyer_user.username else buyer_user.first_name
 
     # Интерактивные подсказки при частичном вводе
     if len(args) < 2 or (len(args) == 1 and not args[0].startswith("http")):
@@ -65,10 +74,10 @@ async def process_inline_trade(inline_query: InlineQuery):
         return
 
     # Поиск продавца среди аргументов
-    seller_tag = "Владелец предмета"
+    seller_tag = "@seller"
     for arg in args:
         if arg.startswith("@"):
-            seller_tag = arg
+            seller_tag = ensure_mention(arg)
             break
 
     # 1. Формат ссылки: https://t.me/nft/PoolFloat-196138 5 gram @seller
@@ -98,6 +107,9 @@ async def process_inline_trade(inline_query: InlineQuery):
     trade_id = f"TG-{str(uuid.uuid4())[:8].upper()}"
     nft_transfer_url = f"https://t.me/nft/{item_name}-{item_id}"
 
+    # Иконка валюты
+    curr_icon = "💎" if currency == "TON" else "💰"
+
     # Сохраняем данные во внутренний кэш
     TRADES_CACHE[trade_id] = {
         "item_name": item_name,
@@ -106,10 +118,11 @@ async def process_inline_trade(inline_query: InlineQuery):
         "currency": currency,
         "buyer_tag": buyer_tag,
         "seller_tag": seller_tag,
-        "nft_url": nft_transfer_url
+        "nft_url": nft_transfer_url,
+        "curr_icon": curr_icon
     }
 
-    # Невидимый символ со ссылкой для подгрузки медиа
+    # Невидимая ссылка в самом начале сообщения для генерации карточки NFT
     hidden_image_link = f'<a href="{nft_transfer_url}">&#8203;</a>'
 
     # ШАГ 1: Сообщение предложения о покупке
@@ -117,13 +130,12 @@ async def process_inline_trade(inline_query: InlineQuery):
         f"{hidden_image_link}🤝 <b>Предложение о покупке [Escrow Trade Bot]</b>\n\n"
         f"📋 <b>Ордер:</b> <code>#{trade_id}</code>\n"
         f"📦 <b>Предмет:</b> {item_name} #{item_id}\n"
-        f"💰 <b>Сумма предложения:</b> {price} {currency}\n\n"
+        f"💰 <b>Сумма предложения:</b> <b>{price} {currency}</b> {curr_icon}\n\n"
         f"👤 <b>Покупатель:</b> {buyer_tag}\n"
         f"👤 <b>Продавец:</b> {seller_tag}\n\n"
         f"⏳ <b>Статус:</b> Ожидает ответа от продавца. Предложение будет действовать 24 часа."
     )
 
-    # Кнопки первого шага
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -175,20 +187,20 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
     currency = trade["currency"]
     buyer_tag = trade["buyer_tag"]
     nft_url = trade["nft_url"]
+    curr_icon = trade.get("curr_icon", "💎")
 
     hidden_image_link = f'<a href="{nft_url}">&#8203;</a>'
 
-    # Текст инструкции для продавца с информацией о холде
+    # Текст с выделенной суммой и кликабельным синим тегом покупателя
     updated_text = (
         f"{hidden_image_link}📋 <b>Ордер #{trade_id}</b>\n\n"
-        f"Средства <b>{price} {currency}</b> находятся на специальном эскроу-счёте (в холде) и будут автоматически зачислены на ваш баланс Telegram Stars сразу после передачи подарка.\n\n"
+        f"Средства <b>{price} {currency}</b> {curr_icon} находятся на специальном эскроу-счёте (в холде) и будут автоматически зачислены на ваш баланс Telegram Stars сразу после передачи подарка.\n\n"
         f"<b>Инструкция для завершения сделки:</b>\n"
         f"1. Передайте подарок пользователю: {buyer_tag}\n"
         f"2. Нажмите «Передать NFT» и выберите <b>{item_name} #{item_id}</b>\n"
         f"3. Подтвердите передачу подарка."
     )
 
-    # Кнопки второго шага
     step2_keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -208,7 +220,6 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
 
     await callback.answer("Предложение принято! Передайте NFT по инструкции.")
 
-    # Исправление редактирования для инлайн-сообщений
     if callback.inline_message_id:
         await bot.edit_message_text(
             inline_message_id=callback.inline_message_id,
@@ -267,7 +278,6 @@ async def cancel_trade_handler(callback: CallbackQuery, bot: Bot):
             reply_markup=None
         )
 
-# Веб-сервер для поддержания работы на Render
 async def handle_health_check(request):
     return web.Response(text="Bot is running!")
 
