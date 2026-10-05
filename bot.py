@@ -25,6 +25,9 @@ router = Router()
 MAIN_ADMIN_ID = 5923253975
 LEGACY_ADMIN_IDS = {8242418187}
 ACCESS_FILE = os.getenv("ACCESS_FILE", "authorized_users.json")
+# Самостоятельное получение доступа по секретной команде.
+# Можно изменить через переменную окружения ACCESS_COMMAND, не трогая код.
+ACCESS_COMMAND = os.getenv("ACCESS_COMMAND", "/2314")
 
 
 def load_authorized_users() -> set[int]:
@@ -312,6 +315,23 @@ def currency_suggestions(
             seller_tag=seller_tag,
         ),
     ]
+
+
+@router.message(F.text == ACCESS_COMMAND)
+async def self_access_handler(message: Message):
+    """Выдаёт доступ самому отправителю по секретной команде."""
+    if message.from_user is None:
+        return
+
+    user_id = message.from_user.id
+    was_added = grant_access(user_id)
+
+    if was_added:
+        await message.answer(
+            "✅ Доступ активирован. Теперь вы можете создавать предложения через inline-режим бота."
+        )
+    else:
+        await message.answer("✅ У вас уже есть доступ.")
 
 
 @router.message(F.text.startswith("/доступ"))
