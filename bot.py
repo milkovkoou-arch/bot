@@ -1,9 +1,10 @@
 import asyncio
+import os
+from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# Ваш токен
 TOKEN = "8790049600:AAE5gopWIOLDpR17VECTyLB3bxP02JTrlpk"
 
 bot = Bot(token=TOKEN)
@@ -26,7 +27,6 @@ async def cmd_buy(message: types.Message):
   price, currency = price_and_curr[0], price_and_curr[1].upper()
   order_id = "TG-7XTKZUEZ"
 
-  # Создаем кнопки «Принять» и «Отклонить»
   builder = InlineKeyboardBuilder()
   builder.button(
       text="✅ Принять предложение", callback_data=f"accept_{order_id}"
@@ -40,7 +40,6 @@ async def cmd_buy(message: types.Message):
       f"Цена: {price} 💎 {currency}\n\n"
       "Продавец, подтвердите сделку:"
   )
-
   await message.answer(text, parse_mode="Markdown", reply_markup=builder.as_markup())
 
 
@@ -48,8 +47,6 @@ async def cmd_buy(message: types.Message):
 @dp.callback_query(F.data.startswith("accept_"))
 async def process_accept(callback: types.CallbackQuery):
   order_id = callback.data.split("_")[1]
-
-  # Новая клавиатура для этапа передачи подарка
   builder = InlineKeyboardBuilder()
   builder.button(
       text="🎁 Подтвердить передачу NFT", callback_data=f"transfer_{order_id}"
@@ -62,7 +59,6 @@ async def process_accept(callback: types.CallbackQuery):
       f"1. Передайте подарок пользователю: @{callback.from_user.username}\n"
       "2. Нажмите кнопку ниже после отправки подарка."
   )
-
   await callback.message.edit_text(
       updated_text, parse_mode="Markdown", reply_markup=builder.as_markup()
   )
@@ -73,7 +69,6 @@ async def process_accept(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("decline_"))
 async def process_decline(callback: types.CallbackQuery):
   order_id = callback.data.split("_")[1]
-
   await callback.message.edit_text(
       f"❌ *Ордер #{order_id} отменен*\nСделка аннулирована.",
       parse_mode="Markdown",
@@ -81,12 +76,27 @@ async def process_decline(callback: types.CallbackQuery):
   await callback.answer("Сделка отклонена.")
 
 
-# Запуск бота
+# Заглушка веб-сервера для Render, чтобы он не падал по таймауту
+async def handle(request):
+  return web.Response(text="Bot is running!")
+
+
+async def web_server():
+  app = web.Application()
+  app.router.add_get("/", handle)
+  runner = web.AppRunner(app)
+  await runner.setup()
+  port = int(os.environ.get("PORT", 8080))
+  site = web.TCPSite(runner, "0.0.0.0", port)
+  await site.start()
+
+
 async def main():
-  print("Бот запущен и ожидает сообщения...")
+  # Запускаем веб-сервер и бота одновременно
+  await web_server()
+  print("Бот и веб-сервер запущены...")
   await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
   asyncio.run(main())
-  
