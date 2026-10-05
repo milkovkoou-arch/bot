@@ -61,7 +61,7 @@ def grant_access(user_id: int) -> bool:
 
 
 def access_status(user_id: int) -> str:
-    return "✅ Доступ есть" if has_access(user_id) else "❌ Доступа нет"
+    return "Доступ есть" if has_access(user_id) else "Доступа нет"
 
 # Кэш для хранения активных сделок
 TRADES_CACHE = {}
@@ -239,13 +239,13 @@ def build_trade_result(
 
     # GRAM custom emoji появляется ТОЛЬКО здесь — в последнем финальном message_text.
     message_text = (
-        f"🤝 <b>Предложение о покупке [Escrow Trade Bot]</b>\n\n"
-        f"📋 <b>Ордер:</b> <code>#{trade_id}</code>\n"
-        f"📦 <b>Предмет:</b> {escape(item_name)} #{escape(item_id)}\n"
-        f"💰 <b>Сумма предложения:</b> {currency_display_text}\n\n"
-        f"👤 <b>Покупатель:</b> {buyer_mention}\n"
-        f"👤 <b>Продавец:</b> {seller_mention}\n\n"
-        f"⏳ <b>Статус:</b> Ожидает ответа от продавца. Предложение будет действовать 24 часа."
+        f"<b>Предложение о покупке [Telegram market]</b>\n\n"
+        f"<b>Ордер:</b> <code>#{trade_id}</code>\n"
+        f"<b>Предмет:</b> {escape(item_name)} #{escape(item_id)}\n"
+        f"<b>Сумма предложения:</b> {currency_display_text}\n\n"
+        f"<b>Покупатель:</b> {buyer_mention}\n"
+        f"<b>Продавец:</b> {seller_mention}\n\n"
+        f"<b>Статус:</b> Ожидает ответа от продавца. Предложение будет действовать 24 часа."
     )
 
     keyboard = InlineKeyboardMarkup(
@@ -268,7 +268,7 @@ def build_trade_result(
     currency_label = "GRAM" if currency == "GRAM" else "STARS"
     return InlineQueryResultArticle(
         id=trade_id,
-        title=f"{'🪙' if currency == 'GRAM' else '⭐️'} {price} {currency_label} — отправить предложение",
+        title=f"{price} {currency_label} — отправить предложение",
         description=f"NFT: {item_name} #{item_id} · Продавец: {seller_tag}",
         input_message_content=InputTextMessageContent(
             message_text=message_text,
@@ -315,7 +315,7 @@ def currency_suggestions(
 async def grant_access_handler(message: Message):
     """Только MAIN_ADMIN_ID может выдавать доступ командой /доступ <telegram_id>."""
     if message.from_user is None or message.from_user.id != MAIN_ADMIN_ID:
-        await message.answer("⛔ Только главный админ может выдавать доступ.")
+        await message.answer("Только главный админ может выдавать доступ.")
         return
 
     parts = message.text.split() if message.text else []
@@ -328,18 +328,18 @@ async def grant_access_handler(message: Message):
         if user_id <= 0:
             raise ValueError
     except ValueError:
-        await message.answer("❌ Нужен корректный Telegram ID, например: /доступ 123456789")
+        await message.answer("Нужен корректный Telegram ID, например: /доступ 123456789")
         return
 
     was_added = grant_access(user_id)
     if was_added:
         await message.answer(
-            f"✅ Доступ выдан пользователю <code>{user_id}</code>.\n"
+            f"Доступ выдан пользователю <code>{user_id}</code>.\n"
             "Теперь он может использовать inline-режим бота.",
             parse_mode="HTML",
         )
     else:
-        await message.answer(f"ℹ️ У пользователя <code>{user_id}</code> доступ уже есть.", parse_mode="HTML")
+        await message.answer(f"У пользователя <code>{user_id}</code> доступ уже есть.", parse_mode="HTML")
 
 
 @router.inline_query()
@@ -365,7 +365,7 @@ async def process_inline_trade(inline_query: InlineQuery):
             suggestions.append(
                 InlineQueryResultArticle(
                     id=f"suggest_{gift}",
-                    title=f"📦 Предмет: {gift}",
+                    title=f"Предмет: {gift}",
                     description=f"Например: @{inline_query.bot.username} {gift} 196138 5",
                     input_message_content=InputTextMessageContent(
                         message_text=f"@{inline_query.bot.username} {gift} 196138 5"
@@ -419,10 +419,6 @@ async def process_inline_trade(inline_query: InlineQuery):
 # ==========================================
 @router.callback_query(F.data.startswith("accept:"))
 async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
-    if not callback.from_user or not has_access(callback.from_user.id):
-        await callback.answer("⛔ У вас нет доступа к боту.", show_alert=True)
-        return
-
     trade_id = callback.data.split(":")[1]
     trade = TRADES_CACHE.get(trade_id)
 
@@ -438,7 +434,7 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
     currency_display = trade["currency_display"]
 
     updated_text = (
-        f"📋 <b>Ордер #{trade_id}</b>\n\n"
+        f"<b>Ордер #{trade_id}</b>\n\n"
         f"Средства ({currency_display}) находятся на специальном эскроу-счёте (в холде) и будут автоматически зачислены на ваш баланс сразу после передачи подарка.\n\n"
         f"<b>Инструкция для завершения сделки:</b>\n"
         f"1. Передайте подарок пользователю: {buyer_mention}\n"
@@ -450,7 +446,7 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Передать NFT ↗", 
+                    text="Передать NFT", 
                     url=nft_url
                 )
             ],
@@ -494,12 +490,8 @@ async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
 # ==========================================
 @router.callback_query(F.data.startswith("confirm:"))
 async def confirm_transfer_handler(callback: CallbackQuery):
-    if not callback.from_user or not has_access(callback.from_user.id):
-        await callback.answer("⛔ У вас нет доступа к боту.", show_alert=True)
-        return
-
     await callback.answer(
-        text="⚠️ Ошибка: Предмет еще не передан пользователю. Пожалуйста, передайте NFT и нажмите снова.", 
+        text="Ошибка: Предмет еще не передан пользователю. Пожалуйста, передайте NFT и нажмите снова.", 
         show_alert=True
     )
 
@@ -508,10 +500,6 @@ async def confirm_transfer_handler(callback: CallbackQuery):
 # ==========================================
 @router.callback_query(F.data.startswith("cancel:"))
 async def cancel_trade_handler(callback: CallbackQuery, bot: Bot):
-    if not callback.from_user or not has_access(callback.from_user.id):
-        await callback.answer("⛔ У вас нет доступа к боту.", show_alert=True)
-        return
-
     trade_id = callback.data.split(":")[1]
     TRADES_CACHE.pop(trade_id, None)
 
@@ -520,13 +508,13 @@ async def cancel_trade_handler(callback: CallbackQuery, bot: Bot):
     if callback.inline_message_id:
         await bot.edit_message_text(
             inline_message_id=callback.inline_message_id,
-            text="❌ <b>Сделка была отменена.</b>",
+            text="<b>Сделка была отменена.</b>",
             parse_mode="HTML",
             reply_markup=None
         )
     elif callback.message:
         await callback.message.edit_text(
-            text="❌ <b>Сделка была отменена.</b>",
+            text="<b>Сделка была отменена.</b>",
             parse_mode="HTML",
             reply_markup=None
         )
