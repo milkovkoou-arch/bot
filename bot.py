@@ -1,6 +1,6 @@
 import asyncio
 import os
-import uuid
+import secrets
 import logging
 from html import escape
 from aiohttp import web
@@ -177,7 +177,7 @@ def build_trade_result(
     buyer_mention = buyer_link(buyer_user.id, buyer_user.username, buyer_user.first_name)
     seller_mention = seller_link(seller_tag)
 
-    trade_id = trade_id or f"TG-{str(uuid.uuid4())[:8].upper()}"
+    trade_id = trade_id or f"TG-{secrets.token_hex(5).upper()}"
     nft_transfer_url = f"https://t.me/nft/{item_name}-{item_id}"
     currency_display_text = currency_display(price, currency)
 
