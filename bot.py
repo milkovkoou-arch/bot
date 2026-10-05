@@ -25,10 +25,7 @@ TRADES_CACHE = {}
 
 # Укажите реальный custom_emoji_id из пакета https://t.me/addemoji/MyTonWalletA
 # (Узнать его можно, переслав нужный стикер боту @RawDataBot)
-# ID GRAM-эмодзи из https://t.me/addemoji/MyTonWalletA
-# Получен от пользователя через @RawDataBot.
-# Важно: для inline-сообщений Telegram может потребовать Premium владельца бота
-# или дополнительный username бота на Fragment, иначе будет показан fallback-emoji.
+# Custom emoji для GRAM из https://t.me/addemoji/MyTonWalletA
 GRAM_EMOJI_ID = "5264766603584641330"
 
 POPULAR_GIFTS = [
@@ -64,15 +61,219 @@ def seller_link(tag: str) -> str:
     username = normalized[1:]
     return f'<a href="https://t.me/{escape(username)}">{escape(normalized)}</a>'
 
+
+def normalize_currency(value: str | None) -> str:
+    """Приводит разные варианты ввода к GRAM или STARS."""
+    if not value:
+        return "GRAM"
+    value = value.strip().upper()
+    if value in {"TON", "GRAM", "GRAMS"}:
+        return "GRAM"
+    if value in {"STAR", "STARS"}:
+        return "STARS"
+    return value
+
+
+def currency_display(price: str, currency: str) -> str:
+    """Добавляет валютный символ только в финальный текст уже выбранной сделки.
+
+    Важно: GRAM custom emoji НЕ используется в заголовке inline-результата,
+    описании или промежуточном выборе. Он добавляется только на последнем
+    этапе — в message_text, который реально отправляется в чат.
+    """
+    currency = normalize_currency(currency)
+
+    if currency == "GRAM":
+        # 5264766603584641330 — custom emoji GRAM из MyTonWalletA.
+        # ВАЖНО: Telegram требует, чтобы внутри tg-emoji был именно
+        # альтернативный обычный emoji, связанный с этим custom emoji.
+        # У этого GRAM custom emoji альтернатива — 💎. Сам custom emoji
+        # при этом в поддерживаемом Telegram будет выглядеть как GRAM.
+        return f'{escape(price)} GRAM <tg-emoji emoji-id="{GRAM_EMOJI_ID}">💎</tg-emoji>'
+
+    if currency == "STARS":
+        # Для Stars пользователь попросил обычную звезду ⭐️.
+        return f'{escape(price)} STARS ⭐️'
+
+    return f"{escape(price)} {escape(currency)}"
+
+
+def parse_trade_parts(args: list[str]):
+    """Извлекает NFT, ID и цену из inline-команды."""
+    if not args:
+        return None
+
+    is_url = args[0].startswith("http://") or args[0].startswith("https://")
+
+    if is_url:
+        if len(args) < 2 or "/nft/" not in args[0]:
+            return None
+        raw_url = args[0]
+        slug = raw_url.split("/nft/")[-1].split("?")[0].split("#")[0]
+        if "-" not in slug:
+            return None
+        parts = slug.rsplit("-", 1)
+        item_name = format_item_name(parts[0])
+        item_id = parts[1].replace("#", "")
+        price = args[1]
+        rest = args[2:]
+    else:
+        if len(args) < 3:
+            return None
+        item_name = format_item_name(args[0])
+        item_id = args[1].replace("#", "").strip()
+        price = args[2]
+        rest = args[3:]
+
+    seller_tag = "@seller"
+    currency = None
+    for arg in rest:
+        if arg.startswith("@"):
+            seller_tag = ensure_mention(arg)
+        elif currency is None:
+            normalized = normalize_currency(arg)
+            if normalized in {"GRAM", "STARS"}:
+                currency = normalized
+
+    return item_name, item_id, price, seller_tag, currency
+
+
+def is_currency_selection_query(args: list[str]) -> bool:
+    """True, если пользователь указал предмет+ID+цену, но ещё не валюту."""
+    if not args:
+        return False
+
+    is_url = args[0].startswith("http://") or args[0].startswith("https://")
+    if is_url:
+        if len(args) not in (2, 3):
+            return False
+        # URL + цена + (необязательно @seller)
+        return not (len(args) == 3 and not args[2].startswith("@"))
+
+    if len(args) not in (3, 4):
+        return False
+
+    # 4-й аргумент — либо @seller, либо явно указанная валюта.
+    if len(args) == 4 and not args[3].startswith("@"):
+        return False
+    return True
+
+
+def build_trade_result(
+    inline_query: InlineQuery,
+    item_name: str,
+    item_id: str,
+    price: str,
+    currency: str,
+    seller_tag: str = "@seller",
+    trade_id: str | None = None,
+) -> InlineQueryResultArticle:
+    """Создаёт уже финальное inline-сообщение сделки."""
+    currency = normalize_currency(currency)
+    seller_tag = ensure_mention(seller_tag)
+
+    buyer_user = inline_query.from_user
+    buyer_tag = ensure_mention(buyer_user.username) if buyer_user.username else buyer_user.first_name
+    buyer_mention = buyer_link(buyer_user.id, buyer_user.username, buyer_user.first_name)
+    seller_mention = seller_link(seller_tag)
+
+    trade_id = trade_id or f"TG-{str(uuid.uuid4())[:8].upper()}"
+    nft_transfer_url = f"https://t.me/nft/{item_name}-{item_id}"
+    currency_display_text = currency_display(price, currency)
+
+    TRADES_CACHE[trade_id] = {
+        "item_name": item_name,
+        "item_id": item_id,
+        "price": price,
+        "currency": currency,
+        "buyer_tag": buyer_tag,
+        "seller_tag": seller_tag,
+        "nft_url": nft_transfer_url,
+        "currency_display": currency_display_text,
+        "buyer_mention": buyer_mention,
+        "seller_mention": seller_mention,
+    }
+
+    # GRAM custom emoji появляется ТОЛЬКО здесь — в последнем финальном message_text.
+    message_text = (
+        f"🤝 <b>Предложение о покупке [Escrow Trade Bot]</b>\n\n"
+        f"📋 <b>Ордер:</b> <code>#{trade_id}</code>\n"
+        f"📦 <b>Предмет:</b> {escape(item_name)} #{escape(item_id)}\n"
+        f"💰 <b>Сумма предложения:</b> {currency_display_text}\n\n"
+        f"👤 <b>Покупатель:</b> {buyer_mention}\n"
+        f"👤 <b>Продавец:</b> {seller_mention}\n\n"
+        f"⏳ <b>Статус:</b> Ожидает ответа от продавца. Предложение будет действовать 24 часа."
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Принять предложение",
+                    callback_data=f"accept:{trade_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Отклонить",
+                    callback_data=f"cancel:{trade_id}",
+                )
+            ],
+        ]
+    )
+
+    currency_label = "GRAM" if currency == "GRAM" else "STARS"
+    return InlineQueryResultArticle(
+        id=trade_id,
+        title=f"{'🪙' if currency == 'GRAM' else '⭐️'} {price} {currency_label} — отправить предложение",
+        description=f"NFT: {item_name} #{item_id} · Продавец: {seller_tag}",
+        input_message_content=InputTextMessageContent(
+            message_text=message_text,
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(
+                url=nft_transfer_url,
+                prefer_large_media=True,
+                show_above_text=False,
+            ),
+        ),
+        reply_markup=keyboard,
+    )
+
+
+def currency_suggestions(
+    inline_query: InlineQuery,
+    item_name: str,
+    item_id: str,
+    price: str,
+    seller_tag: str = "@seller",
+) -> list[InlineQueryResultArticle]:
+    """Показывает выбор валюты; при клике сразу отправляется финальная сделка."""
+    return [
+        build_trade_result(
+            inline_query,
+            item_name=item_name,
+            item_id=item_id,
+            price=price,
+            currency="GRAM",
+            seller_tag=seller_tag,
+        ),
+        build_trade_result(
+            inline_query,
+            item_name=item_name,
+            item_id=item_id,
+            price=price,
+            currency="STARS",
+            seller_tag=seller_tag,
+        ),
+    ]
+
+
 @router.inline_query()
 async def process_inline_trade(inline_query: InlineQuery):
     query_text = inline_query.query.strip()
     args = query_text.split()
-    
-    buyer_user = inline_query.from_user
-    buyer_tag = ensure_mention(buyer_user.username) if buyer_user.username else buyer_user.first_name
-    buyer_mention = buyer_link(buyer_user.id, buyer_user.username, buyer_user.first_name)
 
+    # 1) Пока вводится предмет — показываем подсказки.
     if len(args) < 2 or (len(args) == 1 and not args[0].startswith("http")):
         search_term = args[0].lower() if len(args) == 1 else ""
         matches = [gift for gift in POPULAR_GIFTS if search_term in gift.lower()]
@@ -85,112 +286,52 @@ async def process_inline_trade(inline_query: InlineQuery):
                 InlineQueryResultArticle(
                     id=f"suggest_{gift}",
                     title=f"📦 Предмет: {gift}",
-                    description=f"Шаблон: @{inline_query.bot.username} {gift} 12345 15 GRAM @seller",
+                    description=f"Например: @{inline_query.bot.username} {gift} 196138 5",
                     input_message_content=InputTextMessageContent(
-                        message_text=f"@{inline_query.bot.username} {gift} 12345 15 GRAM @seller"
-                    )
+                        message_text=f"@{inline_query.bot.username} {gift} 196138 5"
+                    ),
                 )
             )
         await inline_query.answer(suggestions, cache_time=1)
         return
 
-    seller_tag = "@seller"
-    for arg in args:
-        if arg.startswith("@"):
-            seller_tag = ensure_mention(arg)
-            break
-    seller_mention = seller_link(seller_tag)
-
-    if args[0].startswith("http://") or args[0].startswith("https://"):
-        raw_url = args[0]
-        if "/nft/" in raw_url:
-            slug = raw_url.split("/nft/")[-1].split("?")[0].split("#")[0]
-            if "-" in slug:
-                parts = slug.rsplit("-", 1)
-                item_name = format_item_name(parts[0])
-                item_id = parts[1].replace("#", "")
-            else:
-                return
-        else:
+    # 2) Предмет + ID + цена => даём выбор GRAM / STARS.
+    # Custom emoji здесь НЕ используется. Он попадёт в сообщение только после клика.
+    if is_currency_selection_query(args):
+        parsed = parse_trade_parts(args)
+        if not parsed:
+            return
+        item_name, item_id, price, seller_tag, currency = parsed
+        if currency is None:
+            await inline_query.answer(
+                currency_suggestions(
+                    inline_query,
+                    item_name=item_name,
+                    item_id=item_id,
+                    price=price,
+                    seller_tag=seller_tag,
+                ),
+                cache_time=1,
+            )
             return
 
-        price = args[1]
-        currency = args[2].upper() if len(args) > 2 and not args[2].startswith("@") else "TON"
-    else:
-        item_name = format_item_name(args[0])
-        item_id = args[1].replace("#", "").strip()
-        price = args[2]
-        currency = args[3].upper() if len(args) > 3 and not args[3].startswith("@") else "TON"
+    # 3) Валюта явно указана — сразу формируем финальное сообщение.
+    parsed = parse_trade_parts(args)
+    if not parsed:
+        return
 
-    trade_id = f"TG-{str(uuid.uuid4())[:8].upper()}"
-    nft_transfer_url = f"https://t.me/nft/{item_name}-{item_id}"
+    item_name, item_id, price, seller_tag, currency = parsed
+    if currency is None:
+        currency = "GRAM"
 
-    # Настройка валюты и кастомного эмодзи для TON
-    if currency == "TON":
-        currency_display = f"{price} TON <tg-emoji emoji-id='{GRAM_EMOJI_ID}'>💎</tg-emoji>"
-    else:
-        currency_display = f"{price} {currency} 💰"
-
-    TRADES_CACHE[trade_id] = {
-        "item_name": item_name,
-        "item_id": item_id,
-        "price": price,
-        "currency": currency,
-        "buyer_tag": buyer_tag,
-        "seller_tag": seller_tag,
-        "nft_url": nft_transfer_url,
-        "currency_display": currency_display,
-        "buyer_mention": buyer_mention,
-        "seller_mention": seller_mention
-    }
-
-    # ШАГ 1: Карточка предложения.
-    # Для превью NFT URL передаётся напрямую в LinkPreviewOptions,
-    # поэтому невидимая HTML-ссылка внутри текста больше не нужна.
-    message_text = (
-        f"🤝 <b>Предложение о покупке [Escrow Trade Bot]</b>\n\n"
-        f"📋 <b>Ордер:</b> <code>#{trade_id}</code>\n"
-        f"📦 <b>Предмет:</b> {item_name} #{item_id}\n"
-        f"💰 <b>Сумма предложения:</b> {currency_display}\n\n"
-        f"👤 <b>Покупатель:</b> {buyer_mention}\n"
-        f"👤 <b>Продавец:</b> {seller_mention}\n\n"
-        f"⏳ <b>Статус:</b> Ожидает ответа от продавца. Предложение будет действовать 24 часа."
+    result = build_trade_result(
+        inline_query,
+        item_name=item_name,
+        item_id=item_id,
+        price=price,
+        currency=currency,
+        seller_tag=seller_tag,
     )
-
-    # Чистые и аккуратные нативные кнопки без кричащих эмодзи
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Принять предложение", 
-                    callback_data=f"accept:{trade_id}"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="Отклонить", 
-                    callback_data=f"cancel:{trade_id}"
-                )
-            ]
-        ]
-    )
-
-    result = InlineQueryResultArticle(
-        id=trade_id,
-        title=f"Купить {item_name} #{item_id} за {price} {currency}",
-        description=f"Продавец: {seller_tag}",
-        input_message_content=InputTextMessageContent(
-            message_text=message_text,
-            parse_mode="HTML",
-            link_preview_options=LinkPreviewOptions(
-                url=nft_transfer_url,
-                prefer_large_media=True,
-                show_above_text=False
-            )
-        ),
-        reply_markup=keyboard
-    )
-
     await inline_query.answer([result], cache_time=1)
 
 # ==========================================
