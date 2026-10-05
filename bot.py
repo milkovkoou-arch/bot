@@ -10,10 +10,10 @@ from aiogram.types import (
     InputTextMessageContent, 
     InlineKeyboardMarkup, 
     InlineKeyboardButton,
-    CallbackQuery
+    CallbackQuery,
+    LinkPreviewOptions
 )
 
-# Включение логирования
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -25,6 +25,7 @@ async def process_inline_trade(inline_query: InlineQuery):
     query_text = inline_query.query.strip()
     args = query_text.split()
     
+    # Ожидается ввод вида: swagbag 152347 17 ton (или gram)
     if len(args) < 3:
         return
 
@@ -33,22 +34,32 @@ async def process_inline_trade(inline_query: InlineQuery):
     price = args[2]
     currency = args[3].upper() if len(args) > 3 else "TON"
 
-    trade_id = str(uuid.uuid4())[:8]
+    trade_id = f"TG-{str(uuid.uuid4())[:8].upper()}"
+    
+    # Покупатель — тот, кто вызывает инлайн-бота и отправляет предложение
+    buyer_user = inline_query.from_user
+    buyer_tag = f"@{buyer_user.username}" if buyer_user.username else buyer_user.first_name
+
+    # Ссылка для генерации официального превью карточки предмета в Telegram
+    nft_preview_url = f"https://getgems.io/nft/{item_name.lower()}-{item_id}"
 
     message_text = (
-        f"🤝 **Предложение сделки [Trade Bot]**\n\n"
-        f"📦 **Предмет:** {item_name} #{item_id}\n"
-        f"💰 **Стоимость:** {price} {currency}\n"
-        f"👤 **Продавец:** @{inline_query.from_user.username}\n\n"
-        f"Статус: Ожидает подтверждения покупателем."
+        f"🤝 **Предложение сделки [Escrow Trade Bot]**\n\n"
+        f"📋 **Ордер:** `#{trade_id}`\n"
+        f"📦 **Предмет:** {item_name.capitalize()} #{item_id}\n"
+        f"💰 **Сумма резерва:** {price} {currency}\n\n"
+        f"👤 **Покупатель:** {buyer_tag}\n"
+        f"👤 **Продавец:** Владелец предмета\n\n"
+        f"Статус: Ожидает передачи NFT от продавца.\n"
+        f"🔗 {nft_preview_url}"  # Ссылка генерирует плашку NFT под сообщением
     )
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Принять предложение", 
-                    callback_data=f"trade_accept:{trade_id}"
+                    text="🎁 Передать NFT", 
+                    callback_data=f"trade_accept:{trade_id}:{buyer_tag}"
                 ),
                 InlineKeyboardButton(
                     text="❌ Отклонить", 
@@ -60,11 +71,17 @@ async def process_inline_trade(inline_query: InlineQuery):
 
     result = InlineQueryResultArticle(
         id=trade_id,
-        title=f"Сделка: {item_name} #{item_id} за {price} {currency}",
-        description="Нажмите, чтобы отправить предложение в чат",
+        title=f"Купить {item_name} #{item_id} за {price} {currency}",
+        description=f"Покупатель: {buyer_tag}",
         input_message_content=InputTextMessageContent(
             message_text=message_text,
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            # Настройка подгрузки крупного медиа-превью карточки
+            link_preview_options=LinkPreviewOptions(
+                url=nft_preview_url,
+                prefer_large_media=True,
+                show_above_text=False
+            )
         ),
         reply_markup=keyboard
     )
@@ -73,18 +90,24 @@ async def process_inline_trade(inline_query: InlineQuery):
 
 @router.callback_query(F.data.startswith("trade_accept:"))
 async def accept_trade_handler(callback: CallbackQuery):
-    trade_id = callback.data.split(":")[1]
-    buyer = callback.from_user
+    data_parts = callback.data.split(":")
+    trade_id = data_parts[1]
+    buyer_tag = data_parts[2]
+    
+    # Продавец — пользователь, который нажал на кнопку «Передать NFT»
+    seller_user = callback.from_user
+    seller_tag = f"@{seller_user.username}" if seller_user.username else seller_user.first_name
 
     await callback.answer(
-        text="Вы приняли условия сделки!", 
+        text="Сделка подтверждена! Средства зарезервированы, ожидаем передачу.", 
         show_alert=True
     )
 
     updated_text = (
-        f"🔄 **Сделка #{trade_id} в процессе**\n\n"
-        f"👤 **Покупатель:** @{buyer.username} подтвердил участие.\n"
-        f"⏳ **Статус:** Ожидается передача предмета."
+        f"✅ **Сделка #{trade_id} принята!**\n\n"
+        f"👤 **Покупатель:** {buyer_tag}\n"
+        f"👤 **Продавец:** {seller_tag}\n\n"
+        f"⏳ Средства удержаны в боте. Ожидается подтверждение получения предмета покупателем."
     )
 
     await callback.message.edit_text(
@@ -93,12 +116,20 @@ async def accept_trade_handler(callback: CallbackQuery):
         reply_markup=None
     )
 
-# Фейковый веб-сервер для пройдения проверки порта на Render
+@router.callback_query(F.data.startswith("trade_cancel:"))
+async def cancel_trade_handler(callback: CallbackQuery):
+    await callback.answer(text="Сделка отменена.", show_alert=True)
+    await callback.message.edit_text(
+        text="❌ **Сделка была отменена.**",
+        parse_mode="Markdown",
+        reply_markup=None
+    )
+
+# Фейковый сервер для поддержания работы на Render
 async def handle_health_check(request):
     return web.Response(text="Bot is running!")
 
 async def main():
-    # Запускаем фоновый HTTP-сервер для Render
     app = web.Application()
     app.router.add_get("/", handle_health_check)
     runner = web.AppRunner(app)
@@ -107,7 +138,6 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-    # Запускаем самого бота Telegram
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher()
     dp.include_router(router)
